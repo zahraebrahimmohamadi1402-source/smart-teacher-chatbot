@@ -43,16 +43,6 @@ st.markdown(
         text-align: right;
         direction: rtl;
     }
-    
-    /* مخفی کردن دکمه‌های Streamlit */
-    .stButton button {
-        display: none;
-    }
-    
-    /* مخفی کردن میکروفون */
-    .stAudioRecorder {
-        display: none;
-    }
     </style>
     """,
     unsafe_allow_html=True
@@ -105,8 +95,7 @@ if "current_index" not in st.session_state:
     st.session_state.current_index = 0
     st.session_state.started = False
     st.session_state.slow_mode = False
-    st.session_state.listening = False
-    st.session_state.first_click = False
+    st.session_state.activated = False
 
 def normalize_text(text):
     text = text.strip().lower()
@@ -208,95 +197,37 @@ def handle_command(command):
 
 def main():
     
-    # نمایش فضانورد
+    # فضانورد بزرگ که با کلیک فعال میشه
     st.markdown(
         """
-        <div style="text-align: center; margin-top: 30px;">
-            <div style="font-size: 100px; filter: drop-shadow(0 0 25px #9b7cff);">
+        <div style="text-align: center; margin-top: 100px;">
+            <div style="font-size: 150px; filter: drop-shadow(0 0 25px #9b7cff); cursor: pointer;">
                 👨‍🚀
             </div>
+            <h1 style="color: white; margin-top: 20px;">دستیار املا هوشمند</h1>
         </div>
         """,
         unsafe_allow_html=True
     )
     
-    # صفحه شروع - فقط یه کلیک
-    if not st.session_state.first_click:
-        st.markdown(
-            """
-            <div style="text-align: center; margin: 20px;">
-                <h1 style="color: white;">دستیار املا هوشمند</h1>
-                <p style="color: #b8a9e8; font-size: 20px;">برای شروع، یک بار روی صفحه کلیک کن</p>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-        
-        # یه دکمه مخفی برای شروع
-        if st.button("فعال‌سازی صدا", key="activate_audio"):
-            st.session_state.first_click = True
-            say("سلام! به دستیار املا خوش آمدی.")
-            time.sleep(2)
-            say("برای شروع املا، بگو آماده‌ام")
-            st.rerun()
-    
-    # بعد از کلیک اول
-    else:
-        if not st.session_state.started:
-            # منتظر "آماده‌ام"
-            st.markdown(
-                """
-                <div style="text-align: center; margin: 20px;">
-                    <h2 style="color: white;">گوش می‌دم...</h2>
-                    <p style="color: #b8a9e8;">بگو "آماده‌ام"</p>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-            
-            # میکروفون مخفی که خودکار کار می‌کنه
-            audio = mic_recorder(
-                start_prompt="",
-                stop_prompt="",
-                just_once=True,
-                format="wav",
-                key=f"mic_hidden_start"
-            )
-            
-            if audio:
-                text, confident = speech_to_text(audio["bytes"])
-                if text:
-                    command = classify(text)
-                    if command == "START":
-                        st.session_state.started = True
-                        st.session_state.current_index = 0
-                        say("آفرین! بریم املا رو شروع کنیم.")
-                        time.sleep(2)
-                        say(sentences[0])
-                        st.rerun()
-        
+    # دکمه مخفی زیر فضانورد
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        if not st.session_state.activated:
+            if st.button("شروع", key="activate", use_container_width=True):
+                st.session_state.activated = True
+                say("سلام! به دستیار املا خوش آمدی.")
+                time.sleep(2)
+                say("برای شروع املا، بگو آماده‌ام")
+                st.rerun()
         else:
-            # صفحه املا
-            st.markdown(
-                """
-                <div style="text-align: center; margin: 20px;">
-                    <h2 style="color: white;">گوش می‌دم...</h2>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-            
-            # پخش جمله اول
-            if st.session_state.current_index == 0:
-                say(sentences[0])
-            
-            # میکروفون مخفی
+            # میکروفون بعد از فعال شدن
             audio = mic_recorder(
-                start_prompt="",
-                stop_prompt="",
+                start_prompt="🎙️ صحبت کن",
+                stop_prompt="⏹️ تمام",
                 just_once=True,
                 format="wav",
-                key=f"mic_hidden_{st.session_state.current_index}_{int(time.time())}"
+                key=f"mic_{int(time.time())}"
             )
             
             if audio:
