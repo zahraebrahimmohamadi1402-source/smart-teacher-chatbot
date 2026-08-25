@@ -1,473 +1,311 @@
-```python
+import streamlit as st
 import json
+import time
+import speech_recognition as sr
+from streamlit_mic_recorder import mic_recorder
+import base64
+import io
+import asyncio
+import edge_tts
 
-from command_router import detect_command
-from ai_classifier import classify_intent
-from voice import speak, SLOW_RATE
+st.set_page_config(
+    page_title="دستیار املا",
+    page_icon="🌌",
+    layout="wide"
+)
 
+st.markdown(
+    """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
 
-# =====================================================
-# خواندن فایل املا
-# =====================================================
-
-with open("data/dictation.json", "r", encoding="utf-8") as file:
-    dictation = json.load(file)
-
-sentences = dictation["sentences"]
-
-current_index = 0
-started = False
-waiting_for_confirmation = False
-slow_mode = False
-
-
-# =====================================================
-# یکسان‌سازی متن فارسی
-# =====================================================
-
-def normalize_text(text):
-
-    text = text.strip().lower()
-
-    replacements = {
-        "ي": "ی",
-        "ى": "ی",
-        "ك": "ک",
-        "ۀ": "ه",
-        "ة": "ه",
-        "‌": " ",
-        "ـ": "",
+    [data-testid="stAppViewContainer"] {
+        min-height: 100vh;
+        background:
+            radial-gradient(
+                circle at 50% 40%,
+                #35266b 0%,
+                #171437 45%,
+                #050617 100%
+            );
+        direction: rtl;
     }
 
-    for old, new in replacements.items():
-        text = text.replace(old, new)
+    .block-container {
+        padding: 0 !important;
+        max-width: 100% !important;
+        direction: rtl;
+    }
+    
+    .stMarkdown, p, h1, h2, h3 {
+        text-align: right;
+        direction: rtl;
+    }
+    
+    /* مخفی کردن دکمه‌های Streamlit */
+    .stButton button {
+        display: none;
+    }
+    
+    /* مخفی کردن میکروفون */
+    .stAudioRecorder {
+        display: none;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
-    # حذف فاصله‌های اضافه
-    text = " ".join(text.split())
+VOICE = "fa-IR-DilaraNeural"
+NORMAL_RATE = "-12%"
+SLOW_RATE = "-25%"
 
-    return text
+async def create_voice_base64(text, rate=NORMAL_RATE):
+    communicate = edge_tts.Communicate(text, VOICE, rate=rate)
+    audio_bytes = io.BytesIO()
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            audio_bytes.write(chunk["data"])
+    audio_bytes.seek(0)
+    return base64.b64encode(audio_bytes.read()).decode()
 
-
-# =====================================================
-# بررسی پاسخ مثبت
-# =====================================================
-
-def is_yes(text):
-
-    text = normalize_text(text)
-
-    yes_words = [
-        "بله",
-        "بله بریم",
-        "بله بگو",
-        "بله ادامه بده",
-        "آره",
-        "آره بریم",
-        "اره",
-        "اره بریم",
-        "باشه",
-        "باشه بریم",
-        "حتما",
-        "حتماً",
-        "بریم",
-        "بزن بریم",
-        "ادامه بده",
-        "ادامه",
-        "اوکی",
-        "اوکی بریم",
-        "موافقم",
-        "آماده ام",
-        "آماده‌ام",
-        "آماده‌ام بریم",
-    ]
-
-    if text in yes_words:
-        return True
-
-    # عبارت‌های طبیعی‌تر
-    if "بریم" in text:
-        return True
-
-    if "ادامه" in text:
-        return True
-
-    if "آماده" in text and len(text) < 30:
-        return True
-
-    return False
-
-
-# =====================================================
-# بررسی پاسخ منفی
-# =====================================================
-
-def is_no(text):
-
-    text = normalize_text(text)
-
-    no_words = [
-        "نه",
-        "نخیر",
-        "نه هنوز",
-        "فعلا نه",
-        "فعلاً نه",
-        "نه ممنون",
-        "نمیخوام",
-        "نمی‌خوام",
-    ]
-
-    return text in no_words
-
-
-# =====================================================
-# صحبت کردن
-# =====================================================
+def get_audio_html(text, rate=NORMAL_RATE):
+    try:
+        audio_b64 = asyncio.run(create_voice_base64(text, rate))
+        return f'<audio autoplay><source src="data:audio/mp3;base64,{audio_b64}" type="audio/mp3"></audio>'
+    except:
+        return ""
 
 def say(text):
+    rate = SLOW_RATE if st.session_state.get("slow_mode", False) else NORMAL_RATE
+    audio_html = get_audio_html(text, rate)
+    st.markdown(audio_html, unsafe_allow_html=True)
 
-    print("🔊", text)
+def speech_to_text(audio_bytes):
+    recognizer = sr.Recognizer()
+    try:
+        with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
+            audio = recognizer.record(source)
+        text = recognizer.recognize_google(audio, language="fa-IR")
+        return text, True
+    except:
+        return "", False
 
-    if slow_mode:
-        speak(text, SLOW_RATE)
-    else:
-        speak(text)
+@st.cache_data
+def load_dictation():
+    with open("data/dictation.json", "r", encoding="utf-8") as file:
+        return json.load(file)
 
+dictation = load_dictation()
+sentences = dictation["sentences"]
 
-# =====================================================
-# خواندن جمله فعلی
-# =====================================================
+if "current_index" not in st.session_state:
+    st.session_state.current_index = 0
+    st.session_state.started = False
+    st.session_state.slow_mode = False
+    st.session_state.listening = False
+    st.session_state.first_click = False
 
-def say_current_sentence():
+def normalize_text(text):
+    text = text.strip().lower()
+    replacements = {"ي": "ی", "ى": "ی", "ك": "ک", "ۀ": "ه", "ة": "ه", "‌": " ", "ـ": ""}
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return " ".join(text.split())
 
-    say(sentences[current_index])
-
-
-# =====================================================
-# رفتن به جمله بعدی
-# =====================================================
-
-def go_to_next():
-
-    global current_index
-    global waiting_for_confirmation
-
-    waiting_for_confirmation = False
-
-    if current_index < len(sentences) - 1:
-
-        current_index += 1
-
-        say_current_sentence()
-
-    else:
-
-        say("آفرین! به پایان متن املا رسیدیم.")
-        say("اگر املا تمام شده، بگو تمام شد.")
-
-
-# =====================================================
-# پرسیدن برای رفتن به بعدی
-# =====================================================
-
-def ask_for_next():
-
-    global waiting_for_confirmation
-
-    waiting_for_confirmation = True
-
-    say("خب، کجا بودیم؟ بریم بعدی؟")
-
-
-# =====================================================
-# تشخیص هوشمند فرمان
-# =====================================================
-
-def smart_detect_command(text):
-
+def classify(text):
     text = normalize_text(text)
-
-    # -----------------------------------------------
-    # متن خالی یا خیلی کوتاه
-    # -----------------------------------------------
-
+    
     if not text:
         return "UNCLEAR"
-
-
-    # -----------------------------------------------
-    # اول تشخیص معمولی
-    # -----------------------------------------------
-
-    command = detect_command(text)
-
-    if command != "UNKNOWN":
-        return command
-
-
-    # -----------------------------------------------
-    # اگر فرمان معمولی نفهمید،
-    # از AI کمک می‌گیریم
-    # -----------------------------------------------
-
-    try:
-
-        ai_command = classify_intent(text)
-
-        if ai_command:
-            return ai_command
-
-    except Exception as error:
-
-        print("⚠️ خطا در AI:", error)
-
-
-    # -----------------------------------------------
-    # اگر هیچ‌کدام نفهمیدند
-    # -----------------------------------------------
-
+    
+    if any(w in text for w in ["آماده", "حاضر", "شروع", "بریم"]):
+        return "START"
+    if any(w in text for w in ["دوباره", "تکرار", "باز بگو", "نفهمیدم"]):
+        return "REPEAT"
+    if any(w in text for w in ["نوشتم", "تموم کردم", "تمام کردم"]):
+        return "WROTE"
+    if any(w in text for w in ["ننوشتم", "نتونستم", "نرسیدم"]):
+        return "DID_NOT_WRITE"
+    if any(w in text for w in ["بلد نیستم", "نمی دونم", "نمیدونم"]):
+        return "DONT_KNOW"
+    if any(w in text for w in ["چجوری", "چطور", "چگونه"]):
+        return "HOW_TO_WRITE"
+    if any(w in text for w in ["صبر", "وایسا", "لحظه"]):
+        return "WAIT"
+    if any(w in text for w in ["آرام", "یواش", "کند", "آهسته"]):
+        return "SLOWER"
+    if any(w in text for w in ["بعدی", "ادامه", "بریم بعدی"]):
+        return "NEXT"
+    if any(w in text for w in ["تموم", "تمام", "پایان", "خسته"]):
+        return "FINISH"
+    if text in ["بله", "آره", "اره", "باشه", "حتما", "حتماً"]:
+        return "NEXT"
+    if text in ["نه", "نخیر", "نه هنوز"]:
+        return "WAIT"
+    
     return "UNCLEAR"
 
-
-# =====================================================
-# شروع برنامه
-# =====================================================
-
-print("🤖 دستیار املا هوشمند")
-print("📖", dictation["title"])
-
-say("آماده‌ای؟ پس بریم املا رو شروع کنیم.")
-
-
-# =====================================================
-# حلقه اصلی
-# =====================================================
-
-while True:
-
-    text = input("🎙️ فرمان: ").strip()
-
-    text = normalize_text(text)
-
-
-    # =================================================
-    # پاسخ به سؤال «بریم بعدی؟»
-    # =================================================
-
-    if waiting_for_confirmation:
-
-        # ---------------------------------------------
-        # پاسخ مثبت
-        # ---------------------------------------------
-
-        if is_yes(text):
-
-            go_to_next()
-            continue
-
-
-        # ---------------------------------------------
-        # پاسخ منفی
-        # ---------------------------------------------
-
-        if is_no(text):
-
-            waiting_for_confirmation = False
-
-            say(
-                "باشه، هر وقت آماده بودی بگو بعدی."
-            )
-
-            continue
-
-
-    # =================================================
-    # تشخیص فرمان
-    # =================================================
-
-    command = smart_detect_command(text)
-
-
-    # =================================================
-    # شروع
-    # =================================================
-
+def handle_command(command):
     if command == "START":
-
-        started = True
-        current_index = 0
-        waiting_for_confirmation = False
-
-        say(
-            "آفرین! بریم املا رو شروع کنیم."
-        )
-
-        say_current_sentence()
-
-
-    # =================================================
-    # قبل از شروع
-    # =================================================
-
-    elif not started:
-
-        say(
-            "هنوز املا رو شروع نکردیم. "
-            "وقتی آماده‌ای بگو آماده‌ام."
-        )
-
-
-    # =================================================
-    # تکرار
-    # =================================================
-
+        st.session_state.started = True
+        st.session_state.current_index = 0
+        say("آفرین! بریم املا رو شروع کنیم.")
+        time.sleep(2)
+        say(sentences[0])
+    
     elif command == "REPEAT":
-
-        waiting_for_confirmation = False
-
-        say(
-            "حتماً، دوباره می‌گم."
-        )
-
-        say_current_sentence()
-
-
-    # =================================================
-    # نوشتم
-    # =================================================
-
+        say("حتماً، دوباره می‌گم.")
+        time.sleep(1)
+        say(sentences[st.session_state.current_index])
+    
     elif command == "WROTE":
-
-        waiting_for_confirmation = False
-
-        say("آفرین!")
-
-        go_to_next()
-
-
-    # =================================================
-    # ننوشتم
-    # =================================================
-
+        if st.session_state.current_index < len(sentences) - 1:
+            say("آفرین!")
+            time.sleep(1)
+            st.session_state.current_index += 1
+            say(sentences[st.session_state.current_index])
+        else:
+            say("آفرین! املا تموم شد. خسته نباشی!")
+            st.session_state.started = False
+    
     elif command == "DID_NOT_WRITE":
-
-        waiting_for_confirmation = False
-
-        say(
-            "اشکالی نداره. "
-            "هر وقت آماده بودی بگو بعدی."
-        )
-
-
-    # =================================================
-    # بلد نیستم
-    # =================================================
-
+        say("اشکالی نداره. هر وقت آماده بودی بگو بعدی.")
+    
     elif command == "DONT_KNOW":
-
-        waiting_for_confirmation = False
-
-        say(
-            "اشکالی نداره. "
-            "فعلاً جاش رو خالی بذ، "
-            "بعداً بهش فکر می‌کنیم."
-        )
-
-
-    # =================================================
-    # چجوری بنویسم
-    # =================================================
-
+        say("اشکالی نداره. فعلاً جاش رو خالی بذار، بعداً بهش فکر می‌کنیم.")
+    
     elif command == "HOW_TO_WRITE":
-
-        waiting_for_confirmation = False
-
-        say(
-            "اشکالی نداره. "
-            "دوباره می‌گم، بیشتر فکر کن."
-        )
-
-        say_current_sentence()
-
-
-    # =================================================
-    # صبر
-    # =================================================
-
+        say("اشکالی نداره. دوباره می‌گم، بیشتر فکر کن.")
+        time.sleep(1)
+        say(sentences[st.session_state.current_index])
+    
     elif command == "WAIT":
-
-        waiting_for_confirmation = False
-
-        say(
-            "باشه. "
-            "هر وقت آماده بودی بگو بعدی."
-        )
-
-
-    # =================================================
-    # آرام‌تر
-    # =================================================
-
+        say("باشه. هر وقت آماده بودی بگو بعدی.")
+    
     elif command == "SLOWER":
-
-        waiting_for_confirmation = False
-
-        slow_mode = True
-
-        say(
-            "حتماً. "
-            "از این به بعد آرام‌تر می‌گم."
-        )
-
-        say_current_sentence()
-
-
-    # =================================================
-    # بعدی
-    # =================================================
-
+        st.session_state.slow_mode = True
+        say("حتماً. از این به بعد آرام‌تر می‌گم.")
+        time.sleep(1)
+        say(sentences[st.session_state.current_index])
+    
     elif command == "NEXT":
-
-        go_to_next()
-
-
-    # =================================================
-    # پایان
-    # =================================================
-
+        if st.session_state.current_index < len(sentences) - 1:
+            st.session_state.current_index += 1
+            say(sentences[st.session_state.current_index])
+        else:
+            say("آفرین! املا تموم شد. خسته نباشی!")
+            st.session_state.started = False
+    
     elif command == "FINISH":
+        say("آفرین! املا تموم شد. خسته نباشی!")
+        st.session_state.started = False
+    
+    else:
+        say("دوباره بگو، متوجه نشدم.")
 
-        say(
-            "آفرین! املا تموم شد. "
-            "خسته نباشی!"
+def main():
+    
+    # نمایش فضانورد
+    st.markdown(
+        """
+        <div style="text-align: center; margin-top: 30px;">
+            <div style="font-size: 100px; filter: drop-shadow(0 0 25px #9b7cff);">
+                👨‍🚀
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    
+    # صفحه شروع - فقط یه کلیک
+    if not st.session_state.first_click:
+        st.markdown(
+            """
+            <div style="text-align: center; margin: 20px;">
+                <h1 style="color: white;">دستیار املا هوشمند</h1>
+                <p style="color: #b8a9e8; font-size: 20px;">برای شروع، یک بار روی صفحه کلیک کن</p>
+            </div>
+            """,
+            unsafe_allow_html=True
         )
+        
+        # یه دکمه مخفی برای شروع
+        if st.button("فعال‌سازی صدا", key="activate_audio"):
+            st.session_state.first_click = True
+            say("سلام! به دستیار املا خوش آمدی.")
+            time.sleep(2)
+            say("برای شروع املا، بگو آماده‌ام")
+            st.rerun()
+    
+    # بعد از کلیک اول
+    else:
+        if not st.session_state.started:
+            # منتظر "آماده‌ام"
+            st.markdown(
+                """
+                <div style="text-align: center; margin: 20px;">
+                    <h2 style="color: white;">گوش می‌دم...</h2>
+                    <p style="color: #b8a9e8;">بگو "آماده‌ام"</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+            
+            # میکروفون مخفی که خودکار کار می‌کنه
+            audio = mic_recorder(
+                start_prompt="",
+                stop_prompt="",
+                just_once=True,
+                format="wav",
+                key=f"mic_hidden_start"
+            )
+            
+            if audio:
+                text, confident = speech_to_text(audio["bytes"])
+                if text:
+                    command = classify(text)
+                    if command == "START":
+                        st.session_state.started = True
+                        st.session_state.current_index = 0
+                        say("آفرین! بریم املا رو شروع کنیم.")
+                        time.sleep(2)
+                        say(sentences[0])
+                        st.rerun()
+        
+        else:
+            # صفحه املا
+            st.markdown(
+                """
+                <div style="text-align: center; margin: 20px;">
+                    <h2 style="color: white;">گوش می‌دم...</h2>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+            
+            # پخش جمله اول
+            if st.session_state.current_index == 0:
+                say(sentences[0])
+            
+            # میکروفون مخفی
+            audio = mic_recorder(
+                start_prompt="",
+                stop_prompt="",
+                just_once=True,
+                format="wav",
+                key=f"mic_hidden_{st.session_state.current_index}_{int(time.time())}"
+            )
+            
+            if audio:
+                text, confident = speech_to_text(audio["bytes"])
+                if text:
+                    st.success(f"شنیدم: {text}")
+                    command = classify(text)
+                    handle_command(command)
+                    st.rerun()
 
-        break
-
-
-    # =================================================
-    # نامفهوم
-    # =================================================
-
-    elif command == "UNCLEAR":
-
-        say(
-            "دوباره بگو، می‌خوای چیکار کنیم؟"
-        )
-
-
-    # =================================================
-    # خارج از موضوع
-    # =================================================
-
-    elif command == "OFF_TOPIC":
-
-        waiting_for_confirmation = False
-
-        say(
-            "فعلاً فقط روی املا تمرکز می‌کنیم، "
-            "نه مسئله دیگه‌ای. "
-            "خب، کجا بودیم؟ بریم بعدی؟"
-        )
-
-        waiting_for_confirmation = True
-```
+if __name__ == "__main__":
+    main()
