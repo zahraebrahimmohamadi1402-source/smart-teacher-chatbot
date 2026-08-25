@@ -4,7 +4,7 @@ import io
 import base64
 import asyncio
 import edge_tts
-import speech_recognition as sr
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="دستیار املا", page_icon="🌌", layout="wide")
 
@@ -22,10 +22,6 @@ st.markdown(
     .block-container {
         padding: 0 !important;
         max-width: 100% !important;
-        direction: rtl;
-    }
-    .stMarkdown, p, h1, h2, h3 {
-        text-align: right;
         direction: rtl;
     }
     </style>
@@ -49,24 +45,13 @@ async def create_voice_base64(text, rate=NORMAL_RATE):
 def get_audio_html(text, rate=NORMAL_RATE):
     try:
         audio_b64 = asyncio.run(create_voice_base64(text, rate))
-        return f'<audio autoplay controls><source src="data:audio/mp3;base64,{audio_b64}" type="audio/mp3"></audio>'
-    except Exception as e:
-        st.error(f"خطا: {e}")
+        return f'<audio autoplay><source src="data:audio/mp3;base64,{audio_b64}" type="audio/mp3"></audio>'
+    except:
         return ""
 
 def say(text):
     rate = SLOW_RATE if st.session_state.get("slow_mode", False) else NORMAL_RATE
     st.markdown(get_audio_html(text, rate), unsafe_allow_html=True)
-
-def speech_to_text(audio_bytes):
-    recognizer = sr.Recognizer()
-    try:
-        with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
-            audio = recognizer.record(source)
-        text = recognizer.recognize_google(audio, language="fa-IR")
-        return text
-    except:
-        return ""
 
 @st.cache_data
 def load_dictation():
@@ -99,7 +84,7 @@ def classify(text):
         return "REPEAT"
     if "ننوشتم" in text or "نتونستم" in text:
         return "DID_NOT_WRITE"
-    if "نوشتم" in text or "تموم کردم" in text or "تمام کردم" in text:
+    if "نوشتم" in text or "تموم" in text or "تمام" in text:
         return "WROTE"
     if "بلد نیستم" in text or "نمی دونم" in text or "نمیدونم" in text:
         return "DONT_KNOW"
@@ -111,7 +96,7 @@ def classify(text):
         return "SLOWER"
     if "بعدی" in text or "ادامه" in text:
         return "NEXT"
-    if "پایان" in text or "تموم شد" in text or "تمام شد" in text:
+    if "پایان" in text or "خسته" in text:
         return "FINISH"
     if text in ["بله", "آره", "اره", "باشه", "حتما", "حتماً"]:
         return "NEXT"
@@ -173,19 +158,34 @@ def main():
     if st.session_state.last_message:
         say(st.session_state.last_message)
     
-    col1, col2, col3 = st.columns([1, 1, 1])
-    with col2:
-        audio = st.audio_input("🎙️ صحبت کن")
+    # جاوااسکریپت برای تشخیص گفتار خودکار
+    components.html(
+        """
+        <script>
+        const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+        recognition.lang = 'fa-IR';
+        recognition.continuous = false;
+        recognition.interimResults = false;
         
-        if audio:
-            text = speech_to_text(audio.getvalue())
-            if text:
-                st.success(f"شنیدم: {text}")
-                command = classify(text)
-                st.session_state.last_message = get_response(command)
-                st.rerun()
-            else:
-                st.error("متوجه نشدم، دوباره بگو")
+        recognition.onresult = (event) => {
+            const text = event.results[0][0].transcript;
+            document.getElementById('user_speech').value = text;
+            document.getElementById('submit_btn').click();
+        };
+        
+        recognition.onend = () => {
+            setTimeout(() => {
+                recognition.start();
+            }, 1000);
+        };
+        
+        recognition.start();
+        </script>
+        <input type="hidden" id="user_speech" name="user_speech">
+        <button id="submit_btn" style="display:none;">Submit</button>
+        """,
+        height=0
+    )
 
 if __name__ == "__main__":
     main()
