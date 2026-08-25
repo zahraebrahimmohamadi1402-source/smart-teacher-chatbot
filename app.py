@@ -66,6 +66,7 @@ if "current_index" not in st.session_state:
     st.session_state.started = False
     st.session_state.slow_mode = False
     st.session_state.last_message = ""
+    st.session_state.activated = False
 
 def normalize_text(text):
     text = text.strip().lower()
@@ -155,37 +156,44 @@ def main():
         unsafe_allow_html=True
     )
     
+    # فعال‌سازی اولیه
+    if not st.session_state.activated:
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            if st.button("🎙️ فعال‌سازی دستیار", use_container_width=True):
+                st.session_state.activated = True
+                st.session_state.last_message = "سلام! به دستیار املا خوش آمدی. برای شروع بگو آماده‌ام"
+                st.rerun()
+    
     if st.session_state.last_message:
         say(st.session_state.last_message)
     
-    # جاوااسکریپت برای تشخیص گفتار خودکار
-    components.html(
-        """
-        <script>
-        const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-        recognition.lang = 'fa-IR';
-        recognition.continuous = false;
-        recognition.interimResults = false;
-        
-        recognition.onresult = (event) => {
-            const text = event.results[0][0].transcript;
-            document.getElementById('user_speech').value = text;
-            document.getElementById('submit_btn').click();
-        };
-        
-        recognition.onend = () => {
-            setTimeout(() => {
-                recognition.start();
-            }, 1000);
-        };
-        
-        recognition.start();
-        </script>
-        <input type="hidden" id="user_speech" name="user_speech">
-        <button id="submit_btn" style="display:none;">Submit</button>
-        """,
-        height=0
-    )
+    if st.session_state.activated:
+        # جاوااسکریپت برای گوش دادن خودکار
+        components.html(
+            """
+            <script>
+            const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+            recognition.lang = 'fa-IR';
+            recognition.continuous = true;
+            recognition.interimResults = false;
+            
+            recognition.onresult = (event) => {
+                const text = event.results[event.results.length - 1][0].transcript;
+                window.parent.postMessage({type: 'speech', text: text}, '*');
+            };
+            
+            recognition.onend = () => {
+                setTimeout(() => {
+                    recognition.start();
+                }, 500);
+            };
+            
+            recognition.start();
+            </script>
+            """,
+            height=0
+        )
 
 if __name__ == "__main__":
     main()
