@@ -1,18 +1,12 @@
 import streamlit as st
 import json
-import time
-import speech_recognition as sr
-from streamlit_mic_recorder import mic_recorder
-import base64
 import io
+import base64
 import asyncio
 import edge_tts
+import speech_recognition as sr
 
-st.set_page_config(
-    page_title="دستیار املا",
-    page_icon="🌌",
-    layout="wide"
-)
+st.set_page_config(page_title="دستیار املا", page_icon="🌌", layout="wide")
 
 st.markdown(
     """
@@ -20,25 +14,16 @@ st.markdown(
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
-
     [data-testid="stAppViewContainer"] {
         min-height: 100vh;
-        background:
-            radial-gradient(
-                circle at 50% 40%,
-                #35266b 0%,
-                #171437 45%,
-                #050617 100%
-            );
+        background: radial-gradient(circle at 50% 40%, #35266b 0%, #171437 45%, #050617 100%);
         direction: rtl;
     }
-
     .block-container {
         padding: 0 !important;
         max-width: 100% !important;
         direction: rtl;
     }
-    
     .stMarkdown, p, h1, h2, h3 {
         text-align: right;
         direction: rtl;
@@ -64,14 +49,14 @@ async def create_voice_base64(text, rate=NORMAL_RATE):
 def get_audio_html(text, rate=NORMAL_RATE):
     try:
         audio_b64 = asyncio.run(create_voice_base64(text, rate))
-        return f'<audio autoplay><source src="data:audio/mp3;base64,{audio_b64}" type="audio/mp3"></audio>'
-    except:
+        return f'<audio autoplay controls><source src="data:audio/mp3;base64,{audio_b64}" type="audio/mp3"></audio>'
+    except Exception as e:
+        st.error(f"خطا: {e}")
         return ""
 
 def say(text):
     rate = SLOW_RATE if st.session_state.get("slow_mode", False) else NORMAL_RATE
-    audio_html = get_audio_html(text, rate)
-    st.markdown(audio_html, unsafe_allow_html=True)
+    st.markdown(get_audio_html(text, rate), unsafe_allow_html=True)
 
 def speech_to_text(audio_bytes):
     recognizer = sr.Recognizer()
@@ -79,9 +64,9 @@ def speech_to_text(audio_bytes):
         with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
             audio = recognizer.record(source)
         text = recognizer.recognize_google(audio, language="fa-IR")
-        return text, True
+        return text
     except:
-        return "", False
+        return ""
 
 @st.cache_data
 def load_dictation():
@@ -95,7 +80,7 @@ if "current_index" not in st.session_state:
     st.session_state.current_index = 0
     st.session_state.started = False
     st.session_state.slow_mode = False
-    st.session_state.activated = False
+    st.session_state.last_message = ""
 
 def normalize_text(text):
     text = text.strip().lower()
@@ -106,97 +91,75 @@ def normalize_text(text):
 
 def classify(text):
     text = normalize_text(text)
-    
     if not text:
         return "UNCLEAR"
-    
-    if any(w in text for w in ["آماده", "حاضر", "شروع", "بریم"]):
+    if "آماده" in text or "حاضر" in text or "شروع" in text:
         return "START"
-    if any(w in text for w in ["دوباره", "تکرار", "باز بگو", "نفهمیدم"]):
+    if "تکرار" in text or "دوباره" in text:
         return "REPEAT"
-    if any(w in text for w in ["نوشتم", "تموم کردم", "تمام کردم"]):
-        return "WROTE"
-    if any(w in text for w in ["ننوشتم", "نتونستم", "نرسیدم"]):
+    if "ننوشتم" in text or "نتونستم" in text:
         return "DID_NOT_WRITE"
-    if any(w in text for w in ["بلد نیستم", "نمی دونم", "نمیدونم"]):
+    if "نوشتم" in text or "تموم کردم" in text or "تمام کردم" in text:
+        return "WROTE"
+    if "بلد نیستم" in text or "نمی دونم" in text or "نمیدونم" in text:
         return "DONT_KNOW"
-    if any(w in text for w in ["چجوری", "چطور", "چگونه"]):
+    if "چجوری" in text or "چطور" in text:
         return "HOW_TO_WRITE"
-    if any(w in text for w in ["صبر", "وایسا", "لحظه"]):
+    if "صبر" in text or "وایسا" in text:
         return "WAIT"
-    if any(w in text for w in ["آرام", "یواش", "کند", "آهسته"]):
+    if "آرام" in text or "یواش" in text or "کند" in text:
         return "SLOWER"
-    if any(w in text for w in ["بعدی", "ادامه", "بریم بعدی"]):
+    if "بعدی" in text or "ادامه" in text:
         return "NEXT"
-    if any(w in text for w in ["تموم", "تمام", "پایان", "خسته"]):
+    if "پایان" in text or "تموم شد" in text or "تمام شد" in text:
         return "FINISH"
     if text in ["بله", "آره", "اره", "باشه", "حتما", "حتماً"]:
         return "NEXT"
-    if text in ["نه", "نخیر", "نه هنوز"]:
+    if text in ["نه", "نخیر"]:
         return "WAIT"
-    
-    return "UNCLEAR"
+    return "OFF_TOPIC"
 
-def handle_command(command):
+def get_response(command):
     if command == "START":
         st.session_state.started = True
         st.session_state.current_index = 0
-        say("آفرین! بریم املا رو شروع کنیم.")
-        time.sleep(2)
-        say(sentences[0])
-    
+        return f"آفرین! بریم املا رو شروع کنیم. {sentences[0]}"
     elif command == "REPEAT":
-        say("حتماً، دوباره می‌گم.")
-        time.sleep(1)
-        say(sentences[st.session_state.current_index])
-    
+        return f"حتماً، دوباره می‌گم. {sentences[st.session_state.current_index]}"
     elif command == "WROTE":
         if st.session_state.current_index < len(sentences) - 1:
-            say("آفرین!")
-            time.sleep(1)
             st.session_state.current_index += 1
-            say(sentences[st.session_state.current_index])
+            return f"آفرین! {sentences[st.session_state.current_index]}"
         else:
-            say("آفرین! املا تموم شد. خسته نباشی!")
             st.session_state.started = False
-    
+            return "آفرین! املا تموم شد. خسته نباشی!"
     elif command == "DID_NOT_WRITE":
-        say("اشکالی نداره. هر وقت آماده بودی بگو بعدی.")
-    
+        return "اشکالی نداره. هر وقت آماده بودی بگو بعدی."
     elif command == "DONT_KNOW":
-        say("اشکالی نداره. فعلاً جاش رو خالی بذار، بعداً بهش فکر می‌کنیم.")
-    
+        return "اشکالی نداره. فعلاً جاش رو خالی بذار، بعداً بهش فکر می‌کنیم."
     elif command == "HOW_TO_WRITE":
-        say("اشکالی نداره. دوباره می‌گم، بیشتر فکر کن.")
-        time.sleep(1)
-        say(sentences[st.session_state.current_index])
-    
+        return f"اشکالی نداره. دوباره می‌گم، بیشتر فکر کن. {sentences[st.session_state.current_index]}"
     elif command == "WAIT":
-        say("باشه. هر وقت آماده بودی بگو بعدی.")
-    
+        return "باشه. هر وقت آماده بودی بگو بعدی."
     elif command == "SLOWER":
         st.session_state.slow_mode = True
-        say("حتماً. از این به بعد آرام‌تر می‌گم.")
-        time.sleep(1)
-        say(sentences[st.session_state.current_index])
-    
+        return f"حتماً. از این به بعد آرام‌تر می‌گم. {sentences[st.session_state.current_index]}"
     elif command == "NEXT":
         if st.session_state.current_index < len(sentences) - 1:
             st.session_state.current_index += 1
-            say(sentences[st.session_state.current_index])
+            return sentences[st.session_state.current_index]
         else:
-            say("آفرین! املا تموم شد. خسته نباشی!")
             st.session_state.started = False
-    
+            return "آفرین! املا تموم شد. خسته نباشی!"
     elif command == "FINISH":
-        say("آفرین! املا تموم شد. خسته نباشی!")
         st.session_state.started = False
-    
+        return "آفرین! املا تموم شد. خسته نباشی!"
+    elif command == "OFF_TOPIC":
+        return "فعلاً تمرکزمون روی املاست. بریم بعدی؟"
     else:
-        say("دوباره بگو، متوجه نشدم.")
+        return "دوباره بگو، متوجه نشدم."
 
 def main():
-    
     st.markdown(
         """
         <div style="text-align: center; margin-top: 50px;">
@@ -207,33 +170,22 @@ def main():
         unsafe_allow_html=True
     )
     
-    if not st.session_state.activated:
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col2:
-            if st.button("🚀 شروع", use_container_width=True):
-                st.session_state.activated = True
-                say("سلام! به دستیار املا خوش آمدی.")
-                time.sleep(2)
-                say("برای شروع املا، بگو آماده‌ام")
+    if st.session_state.last_message:
+        say(st.session_state.last_message)
+    
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        audio = st.audio_input("🎙️ صحبت کن")
+        
+        if audio:
+            text = speech_to_text(audio.getvalue())
+            if text:
+                st.success(f"شنیدم: {text}")
+                command = classify(text)
+                st.session_state.last_message = get_response(command)
                 st.rerun()
-    else:
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col2:
-            audio = mic_recorder(
-                start_prompt="🎙️ صحبت کن",
-                stop_prompt="⏹️ تمام",
-                just_once=True,
-                format="wav",
-                key=f"mic_{int(time.time())}"
-            )
-            
-            if audio:
-                text, confident = speech_to_text(audio["bytes"])
-                if text:
-                    st.success(f"شنیدم: {text}")
-                    command = classify(text)
-                    handle_command(command)
-                    st.rerun()
+            else:
+                st.error("متوجه نشدم، دوباره بگو")
 
 if __name__ == "__main__":
     main()
